@@ -54,8 +54,6 @@ int main(int argc, char *argv[]) {
   stat(file_, &filebuff);
   long filesize = filebuff.st_size;
 
-  uint8_t buff[8];  // read 8 hex 1 time
-  uint8_t head[8] = {0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00};
   uint8_t buff[4];  // read 4 hex 1 time
   uint8_t head[4] = {0xD0, 0x0D, 0xFE, 0xED};
   uint8_t buff_c;
