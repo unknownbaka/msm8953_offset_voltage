@@ -37,7 +37,7 @@ There are 3 prebuilt tools in prebuilt/.
 
 ### usage
 ```
-./dtb_process.sh -i -c -f [-u undervolt] [-b overvolt] 
+./dtb_process.sh -i -c -f [-u undervolt] [-b overvolt] [-s screen refresh rate] 
     -i              install boot.img after generation
     -c              does not cleanup workspace after finished(you wanna debug)
     -f              force backup the current boot(milestone) to /sdcard/Android/, otherwise only backup boot on first time
