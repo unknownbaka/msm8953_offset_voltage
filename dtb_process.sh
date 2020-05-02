@@ -8,8 +8,6 @@ clean="1"
 install="0"
 voffset=$((0))
 voffset_increase=$((0))
-goffset=$((0))
-goffset_increase=$((0))
 
 cleanup() {
     $magisk_boot cleanup
@@ -67,7 +65,7 @@ if [ ! -f $dtb_spliter ]; then
     fi
 fi
 
-set -- $(getopt -q icfu:b:g:r: "$@")
+set -- $(getopt -q icfs:u:b: "$@")
 while [ -n "$1" ]; do
     case "$1" in
     -i)
@@ -80,7 +78,12 @@ while [ -n "$1" ]; do
         ;;
     -f)
         echo "found -f option: force backup boot.img"
-        rm -f /sdcard/bootimage/.init
+        ;;
+    -s)
+        param=$(echo $2 | sed 's/[^0-9]//g')
+        #echo "screen refresh rate: $param hz"
+        refresh_rate=$(($param))
+        shift
         ;;
     -u)
         param=$(echo $2 | sed 's/[^0-9]//g')
@@ -100,24 +103,6 @@ while [ -n "$1" ]; do
         voffset_increase=$(($param))
         shift
         ;;
-    -g)
-        param=$(echo $2 | sed 's/[^0-9]//g')
-        if [ "$param" -gt $((160)) ] || [ "$param" -lt $((0)) ]; then
-            abort "! gpu voltage offset too low or too high"
-        fi
-        #echo "gpu voltage offset decrease: -$param mv"
-        goffset=$(($param))
-        shift
-        ;;
-    -r)
-        param=$(echo $2 | sed 's/[^0-9]//g')
-        if [ "$param" -gt $((160)) ] || [ "$param" -lt $((0)) ]; then
-            abort "! gpu voltage offset too low or too high"
-        fi
-        #echo "voltage offset increase: +$param mv"
-        goffset_increase=$(($param))
-        shift
-        ;;
     --)
         shift
         break
@@ -129,21 +114,30 @@ while [ -n "$1" ]; do
     shift
 done
 
-cpu_offset=$(($voffset_increase - $voffset))
-gpu_offset=$(($goffset_increase - $goffset))
-if [ "$cpu_offset" = 0 ] && [ "$gpu_offset" = 0 ]; then
-    abort "cpu and gpu voltage offset: 0mv! exit!"
+if [ -f "./filebuff_o" ]; then
+cleanup
+rm -f kernel_dtb-*
+rm -f filebuff_o filebuff_s
 fi
-echo "cpu voltage offset: $cpu_offset mv, gpu voltage offset: $gpu_offset mv"
 
+cpu_offset=$(($voffset_increase - $voffset))
+if [ "$cpu_offset" = 0 ] && [ "$refresh_rate" = “” ]; then
+    abort "cpu voltage offset: 0mv! screen refresh rate unchanged! exit!"
+fi
+echo "cpu voltage offset: $cpu_offset mv."
+if [ "$refresh_rate" != "" ]; then
+    echo "screen refresh rate: $refresh_rate hz."
+fi
 # step 1 get current boot.img
 
-# ui_print "- backup origin boot.img to /sdcard/bootimage/boot.img"
-dd if=/dev/block/bootdevice/by-name/boot of=./boot.img
-mkdir -p /sdcard/bootimage
-if [ ! -f "/sdcard/bootimage/.init" ]; then
-    cp ./boot.img /sdcard/bootimage/boot-backup-$(date "+%Y-%m-%d-%H-%M-%S").img
-    touch /sdcard/bootimage/.init
+# ui_print "- backup origin boot.img to /sdcard/Android/boot.img"
+if [ -f "./boot.img" ]; then
+    echo "there is a boot.img in $PWD/"
+else
+    dd if=/dev/block/bootdevice/by-name/boot of=./boot.img
+fi
+if [ ! -f "/sdcard/Android" ]; then
+    cp ./boot.img /sdcard/Android/boot-backup-$(date "+%Y-%m-%d-%H-%M-%S").img
 fi
 
 # step 2 unpack boot.img
@@ -196,9 +190,18 @@ $dtb_count)
     ;;
 esac
 
-# step 5 apply voltage offset!
+# step 5 apply modify screen refresh rate!
+if [ "$refresh_rate" = "" ]; then
+    echo "screen refresh rate unchanged"
+else
+	sed -i "s/qcom,mdss-dsi-panel-framerate = <[^)]*>/qcom,mdss-dsi-panel-framerate = <$(printf "0x%x" $refresh_rate)>/g" kernel_dtb_$i.dts
+	sed -i "s/qcom,mdss-dsi-max-refresh-rate = <[^)]*>/qcom,mdss-dsi-max-refresh-rate = <$(printf "0x%x" $refresh_rate)>/g" kernel_dtb_$i.dts
+	echo "modify refresh rate to $refresh_rate hz"
+fi
 
-# ui_print "- !! default cpu 90mv gpu 0mv"
+# step 6 apply voltage offset!
+
+# ui_print "- !! default cpu 90mv"
 # remove gfx_corner open-loop-voltage-fuse-adjustment, i dont know what it is
 gfx_cline=$(cat kernel_dtb_$i.dts | grep -n 'regulator-name = "gfx_corner";' | awk '{print $1}' | sed 's/://g')
 gfx_cline_=$(($gfx_cline + 25))
@@ -216,48 +219,32 @@ while [ $j -le $o_line ]; do
     #echo $j
     line=$(cat filebuff_o | awk "NR==$j")
     open_loop_voltage_=$(echo "$line" | sed -e 's/[\t]*.*<//g' | sed 's/>;//g' | sed 's/\(0x[^ ]* \)\{4\}/&\n/g')
-    first_line=$(echo "$open_loop_voltage_" | head -n1)
-
+	first_line=$(echo "$open_loop_voltage_" | sed -n '1p')
+	second_line=$(echo "$open_loop_voltage_" | sed -n '2p')
+	fourth_line=$(echo "$open_loop_voltage_" | sed -n '4p')
     result=$(echo "$line" | grep gfx,cpr)
-    if [ "$result" != "" ] && [ "$gpu_offset" != "0" ]; then
-        echo "gfx loop voltage adjustment detceted"
-        next_line=$(echo "$open_loop_voltage_" | awk "NR==2")
-        close_flag=$(echo "$first_line" | grep "$next_line")
-        if [ "$close_flag" = "" ]; then
-            open_loop_voltage_=$(cat filebuff_o | awk "NR==$j" | sed -e 's/[\t]*.*<//g' | sed 's/>;//g' | sed 's/\(0x[^ ]* \)\{8\}/&\n/g')
-            first_line=$(echo "$open_loop_voltage_" | head -n1)
-            loop_adjust=$(echo "$first_line" | sed 's/ $//g')
-            new_v1=$(($(echo "$loop_adjust" | awk '{print $1}') + (5 * $gpu_offset / 10) * 1000))
-            new_v2=$(($(echo "$loop_adjust" | awk '{print $2}') + (5 * $gpu_offset / 10) * 1000))
-            new_v3=$(($(echo "$loop_adjust" | awk '{print $3}') + (6 * $gpu_offset / 10) * 1000))
-            new_v4=$(($(echo "$loop_adjust" | awk '{print $4}') + (6 * $gpu_offset / 10) * 1000))
-            new_v5=$(($(echo "$loop_adjust" | awk '{print $5}') + (8 * $gpu_offset / 10) * 1000))
-            new_v6=$(($(echo "$loop_adjust" | awk '{print $6}') + (8 * $gpu_offset / 10) * 1000))
-            new_v7=$(($(echo "$loop_adjust" | awk '{print $7}') + $gpu_offset * 1000))
-            new_v8=$(($(echo "$loop_adjust" | awk '{print $8}') + $gpu_offset * 1000))
-            new_v=$(printf "0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x 0x%x\n" $new_v1 $new_v2 $new_v3 $new_v4 $new_v5 $new_v6 $new_v7 $new_v8 | sed 's/0xf\{8\}/0x/g')
-            echo "replacing $loop_adjust with $new_v"
-            sed -i "s/$loop_adjust/$new_v/g" filebuff_s
-        else
-            loop_adjust=$(echo "$first_line" | sed 's/ $//g')
-            new_v1=$(($(echo "$loop_adjust" | awk '{print $1}') + (5 * $gpu_offset / 10) * 1000))
-            new_v2=$(($(echo "$loop_adjust" | awk '{print $2}') + (6 * $gpu_offset / 10) * 1000))
-            new_v3=$(($(echo "$loop_adjust" | awk '{print $3}') + (8 * $gpu_offset / 10) * 1000))
-            new_v4=$(($(echo "$loop_adjust" | awk '{print $4}') + $gpu_offset * 1000))
-            new_v=$(printf "0x%x 0x%x 0x%x 0x%x\n" $new_v1 $new_v2 $new_v3 $new_v4 | sed 's/0xf\{8\}/0x/g')
-            echo "replacing $loop_adjust with $new_v"
-            sed -i "s/$loop_adjust/$new_v/g" filebuff_s
-        fi
-        ori_line=$(cat filebuff_o | awk "NR==$j" | sed "s/gfx,/qcom,/g")
-        mod_line=$(cat filebuff_s | awk "NR==$j" | sed "s/gfx,/qcom,/g")
-        sed -i "s/$ori_line/$mod_line/g" kernel_dtb_$i.dts
-    elif [ "$cpu_offset" != "0" ] && [ "$result" = "" ]; then
-        loop_adjust=$(echo "$first_line" | sed 's/ $//g')
+    if [ "$cpu_offset" != "0" ] && [ "$result" = "" ]; then
         # echo "$voffset"
         # Linux x86 integer takes up 8 bytes, so it will display as 0xfffffffffff0bdc0, don't worry its correct in arm-linux.
         # really rubbish, arm awk dont support -n
         # new_v=$(echo "$loop_adjust" | awk '{printf("0x%x 0x%x 0x%x 0x%x\n", $1 - dt + it,$2 - dt + it,$3 - dt + it,$4 - dt + it)}' dt="$voffset" it="$voffset_increase")
-
+        loop_adjust=$(echo "$first_line" | sed 's/ $//g')
+        new_v1=$(($(echo "$loop_adjust" | awk '{print $1}') + (9 * $cpu_offset / 10) * 1000))
+        new_v2=$(($(echo "$loop_adjust" | awk '{print $2}') + (9 * $cpu_offset / 10) * 1000))
+        new_v3=$(($(echo "$loop_adjust" | awk '{print $3}') + $cpu_offset * 1000))
+        new_v4=$(($(echo "$loop_adjust" | awk '{print $4}') + $cpu_offset * 1000))
+        new_v=$(printf "0x%x 0x%x 0x%x 0x%x\n" $new_v1 $new_v2 $new_v3 $new_v4 | sed 's/0xf\{8\}/0x/g')
+        echo "replacing $loop_adjust with $new_v"
+        sed -i "s/$loop_adjust/$new_v/g" filebuff_s
+        loop_adjust=$(echo "$second_line" | sed 's/ $//g')
+        new_v1=$(($(echo "$loop_adjust" | awk '{print $1}') + (9 * $cpu_offset / 10) * 1000))
+        new_v2=$(($(echo "$loop_adjust" | awk '{print $2}') + (9 * $cpu_offset / 10) * 1000))
+        new_v3=$(($(echo "$loop_adjust" | awk '{print $3}') + $cpu_offset * 1000))
+        new_v4=$(($(echo "$loop_adjust" | awk '{print $4}') + $cpu_offset * 1000))
+        new_v=$(printf "0x%x 0x%x 0x%x 0x%x\n" $new_v1 $new_v2 $new_v3 $new_v4 | sed 's/0xf\{8\}/0x/g')
+        echo "replacing $loop_adjust with $new_v"
+        sed -i "s/$loop_adjust/$new_v/g" filebuff_s
+        loop_adjust=$(echo "$fourth_line" | sed 's/ $//g')
         new_v1=$(($(echo "$loop_adjust" | awk '{print $1}') + (9 * $cpu_offset / 10) * 1000))
         new_v2=$(($(echo "$loop_adjust" | awk '{print $2}') + (9 * $cpu_offset / 10) * 1000))
         new_v3=$(($(echo "$loop_adjust" | awk '{print $3}') + $cpu_offset * 1000))
@@ -278,14 +265,14 @@ while [ $j -le $o_line ]; do
 done
 echo "patched done."
 
-# step 6 compile dts to dtb
+# step 7 compile dts to dtb
 $dtc -q -I dts -O dtb kernel_dtb_$i.dts -o kernel_dtb-$i
 if [ "$clean" = "1" ]; then
     echo "removing useless kernetl_dtb_$i.dis.."
     rm -f kernel_dtb_$i.dts
 fi
 
-# step 7 generate new dtb
+# step 8 generate new dtb
 i=0
 echo "generating new kernel_dtb.."
 >kernel_dtb
@@ -300,7 +287,7 @@ if [ "$clean" = "1" ]; then
     rm -f filebuff_o filebuff_s
 fi
 
-# step 8 packing boot.img
+# step 9 packing boot.img
 echo "repacking boot.img..."
 $magisk_boot repack boot.img
 case $? in
