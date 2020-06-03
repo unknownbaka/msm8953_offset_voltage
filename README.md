@@ -52,7 +52,7 @@ There are 3 prebuilt tools in prebuilt/.
 open termux bash and get script:
 ```
 $ su
-:/data/data/com.termux/files/home # curl https://github.com/unknownbaka/msm8998_offset_voltage/blob/msm8953/dtb_process.sh > dtb_process.sh
+:/data/data/com.termux/files/home # curl https://github.com/unknownbaka/msm8953_offset_voltage/blob/msm8953/dtb_process.sh > dtb_process.sh
 ```
 
 undervolt!!
