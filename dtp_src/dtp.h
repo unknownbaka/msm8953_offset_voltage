@@ -11,7 +11,7 @@
 typedef struct dtb_info {
   uint32_t total_size;
   uint32_t addr_start;
-  uint32_t addr_stop;
+  // uint32_t addr_stop;
 } dtb;
 
 #endif
